@@ -13,34 +13,44 @@
         {balance = 0 :: number(),
          status = active :: bank_account_status()}).
 
-deposit_amount(BankAccount, Amount) ->
+bank_operation(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+bank_operation(BankAccount, Operation) ->
+    {ok, Operation(BankAccount)}.
+
+update_balance(BankAccount, Amount) ->
     Balance = BankAccount#bank_account.balance,
     BankAccount#bank_account{balance = Balance + Amount}.
 
-get_account_balance(BankAccount) ->
-    case BankAccount#bank_account.status of
-        active -> {ok, BankAccount#bank_account.balance};
-        closed -> {error, account_closed}
-    end.
+deposit_amount(BankAccount, Amount) ->
+    bank_operation(BankAccount,
+                   fun (Account) -> update_balance(Account, Amount) end).
+
+get_balance_operation(BankAccount) ->
+    bank_operation(BankAccount,
+                   fun (Account) -> Account#bank_account.balance end).
 
 close_account(BankAccount) ->
     BankAccount#bank_account{status = closed}.
 
-%---------------------
+next_state({ok, NextState}, From, _) ->
+    From ! {ok, NextState},
+    bank_account_process(NextState);
+next_state({error, Error}, From, BankAccount) ->
+    From ! {error, Error},
+    bank_account_process(BankAccount).
 
 bank_account_process(BankAccount) ->
     receive
         {From, {deposit, Amount}} ->
-            UpdatedBankAccount = deposit_amount(BankAccount,
-                                                Amount),
-            From ! {ok, UpdatedBankAccount},
-            bank_account_process(UpdatedBankAccount);
+            Result = deposit_amount(BankAccount, Amount),
+            next_state(Result, From, BankAccount);
         {From, {close}} ->
-            UpdatedBankAccount = close_account(BankAccount),
+            NextState = close_account(BankAccount),
             From ! {ok, 0},
-            bank_account_process(UpdatedBankAccount);
+            bank_account_process(NextState);
         {From, {get_balance}} ->
-            From ! get_account_balance(BankAccount),
+            From ! get_balance_operation(BankAccount),
             bank_account_process(BankAccount);
         terminate -> ok
     end.
@@ -49,7 +59,7 @@ balance(Pid) ->
     Pid ! {self(), {get_balance}},
     receive
         {ok, Balance} -> Balance;
-        error -> error
+        Error -> Error
     end.
 
 charge(_Pid, _Amount) -> undefined.
@@ -59,10 +69,9 @@ charge(_Pid, _Amount) -> undefined.
 close(Pid) ->
     Pid ! {self(), {close}},
     receive
-        {ok, Amount} -> Amount;
-        _unknown -> io:format("unknown message received", [])
-    end,
-    0.
+        {ok, Balance} -> Balance;
+        Error -> Error
+    end.
 
 start_bank_account() ->
     bank_account_process(#bank_account{}).
@@ -72,6 +81,10 @@ create() -> spawn(fun start_bank_account/0).
 -spec deposit(pid(), number()) -> void.
 
 deposit(Pid, Amount) ->
-    Pid ! {self(), {deposit, Amount}}.
+    Pid ! {self(), {deposit, Amount}},
+    receive
+        {ok, Balance} -> Balance;
+        Error -> Error
+    end.
 
 withdraw(_Pid, _Amount) -> undefined.
