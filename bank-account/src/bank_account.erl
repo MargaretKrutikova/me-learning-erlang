@@ -13,11 +13,6 @@
         {balance = 0 :: number(),
          status = active :: bank_account_status()}).
 
-bank_operation(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-bank_operation(BankAccount, Operation) ->
-    {ok, Operation(BankAccount)}.
-
 update_balance(BankAccount, Amount) ->
     Balance = BankAccount#bank_account.balance,
     BankAccount#bank_account{balance = Balance + Amount}.
@@ -52,9 +47,10 @@ charge_amount(BankAccount, Amount)
 charge_amount(BankAccount, Amount) ->
     {ok, update_balance(BankAccount, -Amount), Amount}.
 
+get_balance_operation(#bank_account{status = closed}) ->
+    {error, account_closed};
 get_balance_operation(BankAccount) ->
-    bank_operation(BankAccount,
-                   fun (Account) -> Account#bank_account.balance end).
+    {ok, BankAccount#bank_account.balance}.
 
 close_account(BankAccount) ->
     BankAccount#bank_account{status = closed}.
@@ -114,8 +110,6 @@ charge(Pid, Amount) ->
         {error, _} -> 0
     end.
 
--spec close(pid()) -> number().
-
 close(Pid) ->
     Pid ! {self(), {close}},
     receive
@@ -127,8 +121,6 @@ start_bank_account() ->
     bank_account_process(#bank_account{}).
 
 create() -> spawn(fun start_bank_account/0).
-
--spec deposit(pid(), number()) -> void.
 
 deposit(Pid, Amount) ->
     Pid ! {self(), {deposit, Amount}},
