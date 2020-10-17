@@ -22,9 +22,25 @@ update_balance(BankAccount, Amount) ->
     Balance = BankAccount#bank_account.balance,
     BankAccount#bank_account{balance = Balance + Amount}.
 
+deposit_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+deposit_amount(_BankAccount, Amount) when Amount < 0 ->
+    {error, invalid_amount};
 deposit_amount(BankAccount, Amount) ->
-    bank_operation(BankAccount,
-                   fun (Account) -> update_balance(Account, Amount) end).
+    {ok, update_balance(BankAccount, Amount)}.
+
+withdraw_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+withdraw_amount(_BankAccount, Amount) when Amount < 0 ->
+    {error, invalid_amount};
+withdraw_amount(BankAccount, Amount)
+    when Amount > BankAccount#bank_account.balance ->
+    AmountToWithdraw = BankAccount#bank_account.balance,
+    {ok,
+     update_balance(BankAccount, -AmountToWithdraw),
+     AmountToWithdraw};
+withdraw_amount(BankAccount, Amount) ->
+    {ok, update_balance(BankAccount, -Amount), Amount}.
 
 get_balance_operation(BankAccount) ->
     bank_operation(BankAccount,
@@ -33,18 +49,28 @@ get_balance_operation(BankAccount) ->
 close_account(BankAccount) ->
     BankAccount#bank_account{status = closed}.
 
-next_state({ok, NextState}, From, _) ->
-    From ! {ok, NextState},
-    bank_account_process(NextState);
-next_state({error, Error}, From, BankAccount) ->
-    From ! {error, Error},
-    bank_account_process(BankAccount).
+%--------------------
 
 bank_account_process(BankAccount) ->
     receive
         {From, {deposit, Amount}} ->
-            Result = deposit_amount(BankAccount, Amount),
-            next_state(Result, From, BankAccount);
+            case deposit_amount(BankAccount, Amount) of
+                {ok, NextState} ->
+                    From ! {ok},
+                    bank_account_process(NextState);
+                {error, Error} ->
+                    From ! {error, Error},
+                    bank_account_process(BankAccount)
+            end;
+        {From, {withdraw, Amount}} ->
+            case withdraw_amount(BankAccount, Amount) of
+                {ok, NextState, AmountWithdrawn} ->
+                    From ! {ok, AmountWithdrawn},
+                    bank_account_process(NextState);
+                {error, Error} ->
+                    From ! {error, Error},
+                    bank_account_process(BankAccount)
+            end;
         {From, {close}} ->
             NextState = close_account(BankAccount),
             From ! {ok, 0},
@@ -82,9 +108,11 @@ create() -> spawn(fun start_bank_account/0).
 
 deposit(Pid, Amount) ->
     Pid ! {self(), {deposit, Amount}},
-    receive
-        {ok, Balance} -> Balance;
-        Error -> Error
-    end.
+    receive Msg -> Msg end.
 
-withdraw(_Pid, _Amount) -> undefined.
+withdraw(Pid, Amount) ->
+    Pid ! {self(), {withdraw, Amount}},
+    receive
+        {ok, AmountWithdrawn} -> AmountWithdrawn;
+        {error, _} -> 0
+    end.
