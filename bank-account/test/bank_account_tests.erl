@@ -68,32 +68,34 @@ withdraw_many_test() ->
     Last = bank_account:balance(BankAccount),
     ?assert((Last =:= 0)).
 
-% charge_test() ->
-%   BankAccount = bank_account:create(),
-%   bank_account:deposit(BankAccount, 10),
-%   Amount = bank_account:charge(BankAccount, 2),
-%   ?assert(Amount =:= 2),
-%   ?assert(bank_account:balance(BankAccount) =:= 8).
+charge_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 10),
+    Amount = bank_account:charge(BankAccount, 2),
+    ?assert((Amount =:= 2)),
+    ?assert((bank_account:balance(BankAccount) =:= 8)).
 
-% charge_fail_test() ->
-%   BankAccount = bank_account:create(),
-%   bank_account:deposit(BankAccount, 10),
-%   Amount = bank_account:charge(BankAccount, -2),
-%   ?assert(Amount =:= 0),
-%   ?assert(bank_account:balance(BankAccount) =:= 10).
+charge_fail_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 10),
+    Amount = bank_account:charge(BankAccount, -2),
+    ?assert((Amount =:= 0)),
+    ?assert((bank_account:balance(BankAccount) =:= 10)).
 
-% charge_excessive_test() ->
-%   BankAccount = bank_account:create(),
-%   bank_account:deposit(BankAccount, 10),
-%   Amount = bank_account:charge(BankAccount, 20),
-%   ?assert(Amount =:= 0),
-%   ?assert(bank_account:balance(BankAccount) =:= 10).
+charge_excessive_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 10),
+    Amount = bank_account:charge(BankAccount, 20),
+    ?assert((Amount =:= 0)),
+    ?assert((bank_account:balance(BankAccount) =:= 10)).
 
-% charge_many_test() ->
-%   BankAccount = bank_account:create(),
-%   bank_account:deposit(BankAccount, 55 ),
-%   [erlang:spawn( fun () -> bank_account:charge(BankAccount, 10) end ) || _X <- lists:seq(1, 10)],
-%   timer:sleep(100),
-%   Last = bank_account:balance(BankAccount),
-%   ?assert(Last =:= 5).
-
+charge_many_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 55),
+    [erlang:spawn(fun () ->
+                          bank_account:charge(BankAccount, 10)
+                  end)
+     || _X <- lists:seq(1, 10)],
+    timer:sleep(100),
+    Last = bank_account:balance(BankAccount),
+    ?assert((Last =:= 5)).

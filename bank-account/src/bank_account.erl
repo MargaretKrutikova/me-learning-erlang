@@ -42,6 +42,16 @@ withdraw_amount(BankAccount, Amount)
 withdraw_amount(BankAccount, Amount) ->
     {ok, update_balance(BankAccount, -Amount), Amount}.
 
+charge_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+charge_amount(_BankAccount, Amount) when Amount < 0 ->
+    {error, invalid_amount};
+charge_amount(BankAccount, Amount)
+    when Amount > BankAccount#bank_account.balance ->
+    {ok, BankAccount, 0};
+charge_amount(BankAccount, Amount) ->
+    {ok, update_balance(BankAccount, -Amount), Amount}.
+
 get_balance_operation(BankAccount) ->
     bank_operation(BankAccount,
                    fun (Account) -> Account#bank_account.balance end).
@@ -71,6 +81,15 @@ bank_account_process(BankAccount) ->
                     From ! {error, Error},
                     bank_account_process(BankAccount)
             end;
+        {From, {charge, Amount}} ->
+            case charge_amount(BankAccount, Amount) of
+                {ok, NextState, AmountCharged} ->
+                    From ! {ok, AmountCharged},
+                    bank_account_process(NextState);
+                {error, Error} ->
+                    From ! {error, Error},
+                    bank_account_process(BankAccount)
+            end;
         {From, {close}} ->
             NextState = close_account(BankAccount),
             From ! {ok, 0},
@@ -88,7 +107,12 @@ balance(Pid) ->
         Error -> Error
     end.
 
-charge(_Pid, _Amount) -> undefined.
+charge(Pid, Amount) ->
+    Pid ! {self(), {charge, Amount}},
+    receive
+        {ok, AmountCharged} -> AmountCharged;
+        {error, _} -> 0
+    end.
 
 -spec close(pid()) -> number().
 
