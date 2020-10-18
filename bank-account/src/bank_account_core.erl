@@ -7,10 +7,14 @@
          open_account/0,
          withdraw_amount/2]).
 
--type bank_account_status() :: active | closed.
+-export_type([bank_account/0,
+              bank_account_status/0,
+              bank_account_error/0]).
 
--type bank_account_error() :: account_closed |
-                              not_enough_money.
+-opaque bank_account_status() :: active | closed.
+
+-opaque bank_account_error() :: account_closed |
+                                not_enough_money.
 
 -type result(R) :: {ok, Result :: R} |
                    {error, bank_account_error()}.
@@ -19,7 +23,7 @@
         {balance = 0 :: number(),
          status = active :: bank_account_status()}).
 
--type bank_account() :: #bank_account{}.
+-opaque bank_account() :: #bank_account{}.
 
 -spec update_balance(bank_account(),
                      number()) -> bank_account().

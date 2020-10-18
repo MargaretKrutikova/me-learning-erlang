@@ -1,5 +1,13 @@
 -module(bank_account).
 
+-import(bank_account_core,
+        [charge_amount/2,
+         close_account/1,
+         deposit_amount/2,
+         get_balance/1,
+         open_account/0,
+         withdraw_amount/2]).
+
 -export([balance/1,
          charge/2,
          close/1,
@@ -7,128 +15,143 @@
          deposit/2,
          withdraw/2]).
 
--type bank_account_status() :: active | closed.
+-spec handle_deposit(bank_account_core:bank_account(),
+                     number(), any()) -> bank_account_core:bank_account().
 
--record(bank_account,
-        {balance = 0 :: number(),
-         status = active :: bank_account_status()}).
+handle_deposit(BankAccount, Amount, From) ->
+    case deposit_amount(BankAccount, Amount) of
+        {ok, {NextState, _}} ->
+            From ! ok,
+            NextState;
+        Error = {error, _} ->
+            From ! Error,
+            BankAccount
+    end.
 
-update_balance(BankAccount, Amount) ->
-    Balance = BankAccount#bank_account.balance,
-    BankAccount#bank_account{balance = Balance + Amount}.
+-spec handle_withdraw(bank_account_core:bank_account(),
+                      number(), any()) -> bank_account_core:bank_account().
 
-deposit_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-deposit_amount(_BankAccount, Amount) when Amount < 0 ->
-    {error, invalid_amount};
-deposit_amount(BankAccount, Amount) ->
-    {ok, update_balance(BankAccount, Amount)}.
+handle_withdraw(BankAccount, Amount, From) ->
+    case withdraw_amount(BankAccount, Amount) of
+        {ok, {NextState, AmountWithdrawn}} ->
+            From ! {ok, AmountWithdrawn},
+            NextState;
+        Error = {error, _} ->
+            From ! Error,
+            BankAccount
+    end.
 
-withdraw_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-withdraw_amount(_BankAccount, Amount) when Amount < 0 ->
-    {error, invalid_amount};
-withdraw_amount(BankAccount, Amount)
-    when Amount > BankAccount#bank_account.balance ->
-    AmountToWithdraw = BankAccount#bank_account.balance,
-    {ok,
-     update_balance(BankAccount, -AmountToWithdraw),
-     AmountToWithdraw};
-withdraw_amount(BankAccount, Amount) ->
-    {ok, update_balance(BankAccount, -Amount), Amount}.
+-spec handle_charge(bank_account_core:bank_account(),
+                    number(), any()) -> bank_account_core:bank_account().
 
-charge_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-charge_amount(_BankAccount, Amount) when Amount < 0 ->
-    {error, invalid_amount};
-charge_amount(BankAccount, Amount)
-    when Amount > BankAccount#bank_account.balance ->
-    {ok, BankAccount, 0};
-charge_amount(BankAccount, Amount) ->
-    {ok, update_balance(BankAccount, -Amount), Amount}.
+handle_charge(BankAccount, Amount, From) ->
+    case charge_amount(BankAccount, Amount) of
+        {ok, {NextState, AmountCharged}} ->
+            From ! {ok, AmountCharged},
+            NextState;
+        Error = {error, _} ->
+            From ! Error,
+            BankAccount
+    end.
 
-get_balance_operation(#bank_account{status = closed}) ->
-    {error, account_closed};
-get_balance_operation(BankAccount) ->
-    {ok, BankAccount#bank_account.balance}.
+-spec
+     handle_account_close(bank_account_core:bank_account(),
+                          any()) -> bank_account_core:bank_account().
 
-close_account(BankAccount) ->
-    BankAccount#bank_account{status = closed}.
+handle_account_close(BankAccount, From) ->
+    {ok, {NextState, Balance}} = close_account(BankAccount),
+    From ! {ok, Balance},
+    NextState.
 
-%--------------------
+-spec
+     bank_account_process(bank_account_core:bank_account()) -> ok.
 
 bank_account_process(BankAccount) ->
     receive
         {From, {deposit, Amount}} ->
-            case deposit_amount(BankAccount, Amount) of
-                {ok, NextState} ->
-                    From ! {ok},
-                    bank_account_process(NextState);
-                {error, Error} ->
-                    From ! {error, Error},
-                    bank_account_process(BankAccount)
-            end;
+            NextState = handle_deposit(BankAccount, Amount, From),
+            bank_account_process(NextState);
         {From, {withdraw, Amount}} ->
-            case withdraw_amount(BankAccount, Amount) of
-                {ok, NextState, AmountWithdrawn} ->
-                    From ! {ok, AmountWithdrawn},
-                    bank_account_process(NextState);
-                {error, Error} ->
-                    From ! {error, Error},
-                    bank_account_process(BankAccount)
-            end;
+            NextState = handle_withdraw(BankAccount, Amount, From),
+            bank_account_process(NextState);
         {From, {charge, Amount}} ->
-            case charge_amount(BankAccount, Amount) of
-                {ok, NextState, AmountCharged} ->
-                    From ! {ok, AmountCharged},
-                    bank_account_process(NextState);
-                {error, Error} ->
-                    From ! {error, Error},
-                    bank_account_process(BankAccount)
-            end;
+            NextState = handle_charge(BankAccount, Amount, From),
+            bank_account_process(NextState);
         {From, {close}} ->
-            NextState = close_account(BankAccount),
-            From ! {ok, 0},
+            NextState = handle_account_close(BankAccount, From),
             bank_account_process(NextState);
         {From, {get_balance}} ->
-            From ! get_balance_operation(BankAccount),
+            From ! get_balance(BankAccount),
             bank_account_process(BankAccount);
         terminate -> ok
     end.
+
+% validation logic
+validate_amount(Amount) when Amount < 0 ->
+    {error, invalid_amount};
+validate_amount(_Amount) -> ok.
+
+-spec balance(pid()) -> number() |
+                        {error, bank_account_core:bank_account_error()}.
 
 balance(Pid) ->
     Pid ! {self(), {get_balance}},
     receive
         {ok, Balance} -> Balance;
-        Error -> Error
+        Error = {error, _} -> Error
     end.
 
-charge(Pid, Amount) ->
-    Pid ! {self(), {charge, Amount}},
-    receive
-        {ok, AmountCharged} -> AmountCharged;
-        {error, _} -> 0
-    end.
+-spec close(pid()) -> number() |
+                      {error, bank_account_core:bank_account_error()}.
 
 close(Pid) ->
     Pid ! {self(), {close}},
     receive
         {ok, Balance} -> Balance;
-        Error -> Error
+        Error = {error, _} -> Error
     end.
 
-start_bank_account() ->
-    bank_account_process(#bank_account{}).
+create() ->
+    spawn(fun () -> bank_account_process(open_account())
+          end).
 
-create() -> spawn(fun start_bank_account/0).
+-spec deposit(pid(), number()) -> number() |
+                                  {error,
+                                   bank_account_core:bank_account_error()}.
 
 deposit(Pid, Amount) ->
-    Pid ! {self(), {deposit, Amount}},
-    receive Msg -> Msg end.
+    case validate_amount(Amount) of
+        ok ->
+            Pid ! {self(), {deposit, Amount}},
+            receive Msg -> Msg end;
+        {error, invalid_amount} -> 0
+    end.
+
+-spec withdraw(pid(), number()) -> number() |
+                                   {error,
+                                    bank_account_core:bank_account_error()}.
 
 withdraw(Pid, Amount) ->
-    Pid ! {self(), {withdraw, Amount}},
+    case validate_amount(Amount) of
+        ok ->
+            Pid ! {self(), {withdraw, Amount}},
+            receive
+                {ok, AmountWithdrawn} -> AmountWithdrawn;
+                {error, not_enough_money} -> 0;
+                Error = {error, _} -> Error
+            end;
+        {error, invalid_amount} -> 0
+    end.
+
+-spec charge(pid(), number()) -> number() |
+                                 {error,
+                                  bank_account_core:bank_account_error()}.
+
+charge(_Pid, Amount) when Amount < 0 -> 0;
+charge(Pid, Amount) ->
+    Pid ! {self(), {charge, Amount}},
     receive
-        {ok, AmountWithdrawn} -> AmountWithdrawn;
-        {error, _} -> 0
+        {ok, AmountCharged} -> AmountCharged;
+        {error, not_enough_money} -> 0;
+        Error = {error, _} -> Error
     end.
