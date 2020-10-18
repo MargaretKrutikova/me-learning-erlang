@@ -13,78 +13,51 @@
         {balance = 0 :: number(),
          status = active :: bank_account_status()}).
 
-% ---- core logic ----
-
 update_balance(Account = #bank_account{balance = B},
                Amount) ->
     Account#bank_account{balance = B + Amount}.
-
-deposit_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-deposit_amount(BankAccount, Amount) ->
-    UpdatedAccount = update_balance(BankAccount, Amount),
-    {ok, {UpdatedAccount, Amount}}.
-
-withdraw_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-withdraw_amount(Account = #bank_account{balance = B},
-                Amount) ->
-    Withdraw = min(B, Amount),
-    {ok, {update_balance(Account, -Withdraw), Withdraw}}.
-
-charge_amount(#bank_account{status = closed}, _) ->
-    {error, account_closed};
-charge_amount(#bank_account{balance = B}, Amount)
-    when Amount > B ->
-    {error, not_enough_money};
-charge_amount(BankAccount, Amount) ->
-    {ok, {update_balance(BankAccount, -Amount), Amount}}.
 
 get_balance(#bank_account{status = closed}) ->
     {error, account_closed};
 get_balance(BankAccount) ->
     {ok, BankAccount#bank_account.balance}.
 
-close_account(BankAccount) ->
-    {ok, {BankAccount#bank_account{status = closed}, 0}}.
+handle_deposit(Account = #bank_account{status = closed},
+               _, From) ->
+    From ! {error, account_closed},
+    Account;
+handle_deposit(Account, Amount, From) ->
+    UpdatedAccount = update_balance(Account, Amount),
+    From ! ok,
+    UpdatedAccount.
 
-open_account() -> #bank_account{}.
+handle_withdraw(Account = #bank_account{status =
+                                            closed},
+                _, From) ->
+    From ! {error, account_closed},
+    Account;
+handle_withdraw(Account = #bank_account{balance = B},
+                Amount, From) ->
+    Withdraw = min(B, Amount),
+    From ! {ok, Withdraw},
+    update_balance(Account, -Withdraw).
 
-% ---- process ----
-
-handle_deposit(BankAccount, Amount, From) ->
-    case deposit_amount(BankAccount, Amount) of
-        {ok, {NextState, _}} ->
-            From ! ok,
-            NextState;
-        Error = {error, _} ->
-            From ! Error,
-            BankAccount
-    end.
-
-handle_withdraw(BankAccount, Amount, From) ->
-    case withdraw_amount(BankAccount, Amount) of
-        {ok, {NextState, AmountWithdrawn}} ->
-            From ! {ok, AmountWithdrawn},
-            NextState;
-        Error = {error, _} ->
-            From ! Error,
-            BankAccount
-    end.
-
+handle_charge(Account = #bank_account{status = closed},
+              _, From) ->
+    From ! {error, account_closed},
+    Account;
+handle_charge(Account = #bank_account{balance = B},
+              Amount, From)
+    when Amount > B ->
+    From ! {ok, 0},
+    Account;
 handle_charge(BankAccount, Amount, From) ->
-    case charge_amount(BankAccount, Amount) of
-        {ok, {NextState, AmountCharged}} ->
-            From ! {ok, AmountCharged},
-            NextState;
-        Error = {error, _} ->
-            From ! Error,
-            BankAccount
-    end.
+    From ! {ok, Amount},
+    update_balance(BankAccount, -Amount).
 
 handle_account_close(BankAccount, From) ->
-    {ok, {NextState, Balance}} = close_account(BankAccount),
-    From ! {ok, Balance},
+    NextState = BankAccount#bank_account{status = closed},
+    From ! {ok, 0},
     NextState.
 
 bank_account_process(BankAccount) ->
@@ -107,12 +80,6 @@ bank_account_process(BankAccount) ->
         terminate -> ok
     end.
 
-% validation logic
-
-validate_amount(Amount) when Amount < 0 ->
-    {error, invalid_amount};
-validate_amount(_Amount) -> ok.
-
 balance(Pid) ->
     Pid ! {self(), {get_balance}},
     receive
@@ -128,37 +95,26 @@ close(Pid) ->
     end.
 
 create() ->
-    spawn(fun () -> bank_account_process(open_account())
+    spawn(fun () -> bank_account_process(#bank_account{})
           end).
 
+deposit(_Pid, Amount) when Amount < 0 -> 0;
 deposit(Pid, Amount) ->
-    case validate_amount(Amount) of
-        ok ->
-            Pid ! {self(), {deposit, Amount}},
-            receive Msg -> Msg end;
-        {error, invalid_amount} -> 0
-    end.
+    Pid ! {self(), {deposit, Amount}},
+    receive Msg -> Msg end.
 
+withdraw(_Pid, Amount) when Amount < 0 -> 0;
 withdraw(Pid, Amount) ->
-    case validate_amount(Amount) of
-        ok ->
-            Pid ! {self(), {withdraw, Amount}},
-            receive
-                {ok, AmountWithdrawn} -> AmountWithdrawn;
-                {error, not_enough_money} -> 0;
-                Error = {error, _} -> Error
-            end;
-        {error, invalid_amount} -> 0
+    Pid ! {self(), {withdraw, Amount}},
+    receive
+        {ok, AmountWithdrawn} -> AmountWithdrawn;
+        Error = {error, _} -> Error
     end.
 
+charge(_Pid, Amount) when Amount < 0 -> 0;
 charge(Pid, Amount) ->
-    case validate_amount(Amount) of
-        ok ->
-            Pid ! {self(), {charge, Amount}},
-            receive
-                {ok, AmountCharged} -> AmountCharged;
-                {error, not_enough_money} -> 0;
-                Error = {error, _} -> Error
-            end;
-        {error, invalid_amount} -> 0
+    Pid ! {self(), {charge, Amount}},
+    receive
+        {ok, AmountCharged} -> AmountCharged;
+        Error = {error, _} -> Error
     end.
