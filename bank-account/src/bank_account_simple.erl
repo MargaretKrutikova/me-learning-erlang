@@ -1,12 +1,4 @@
--module(bank_account).
-
--import(bank_account_core,
-        [charge_amount/2,
-         close_account/1,
-         deposit_amount/2,
-         get_balance/1,
-         open_account/0,
-         withdraw_amount/2]).
+-module(bank_account_simple).
 
 -export([balance/1,
          charge/2,
@@ -15,8 +7,50 @@
          deposit/2,
          withdraw/2]).
 
--spec handle_deposit(bank_account_core:bank_account(),
-                     number(), any()) -> bank_account_core:bank_account().
+-type bank_account_status() :: active | closed.
+
+-record(bank_account,
+        {balance = 0 :: number(),
+         status = active :: bank_account_status()}).
+
+% ---- core logic ----
+
+update_balance(Account = #bank_account{balance = B},
+               Amount) ->
+    Account#bank_account{balance = B + Amount}.
+
+deposit_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+deposit_amount(BankAccount, Amount) ->
+    UpdatedAccount = update_balance(BankAccount, Amount),
+    {ok, {UpdatedAccount, Amount}}.
+
+withdraw_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+withdraw_amount(Account = #bank_account{balance = B},
+                Amount) ->
+    Withdraw = min(B, Amount),
+    {ok, {update_balance(Account, -Withdraw), Withdraw}}.
+
+charge_amount(#bank_account{status = closed}, _) ->
+    {error, account_closed};
+charge_amount(#bank_account{balance = B}, Amount)
+    when Amount > B ->
+    {error, not_enough_money};
+charge_amount(BankAccount, Amount) ->
+    {ok, {update_balance(BankAccount, -Amount), Amount}}.
+
+get_balance(#bank_account{status = closed}) ->
+    {error, account_closed};
+get_balance(BankAccount) ->
+    {ok, BankAccount#bank_account.balance}.
+
+close_account(BankAccount) ->
+    {ok, {BankAccount#bank_account{status = closed}, 0}}.
+
+open_account() -> #bank_account{}.
+
+% ---- process ----
 
 handle_deposit(BankAccount, Amount, From) ->
     case deposit_amount(BankAccount, Amount) of
@@ -28,9 +62,6 @@ handle_deposit(BankAccount, Amount, From) ->
             BankAccount
     end.
 
--spec handle_withdraw(bank_account_core:bank_account(),
-                      number(), any()) -> bank_account_core:bank_account().
-
 handle_withdraw(BankAccount, Amount, From) ->
     case withdraw_amount(BankAccount, Amount) of
         {ok, {NextState, AmountWithdrawn}} ->
@@ -40,9 +71,6 @@ handle_withdraw(BankAccount, Amount, From) ->
             From ! Error,
             BankAccount
     end.
-
--spec handle_charge(bank_account_core:bank_account(),
-                    number(), any()) -> bank_account_core:bank_account().
 
 handle_charge(BankAccount, Amount, From) ->
     case charge_amount(BankAccount, Amount) of
@@ -54,17 +82,10 @@ handle_charge(BankAccount, Amount, From) ->
             BankAccount
     end.
 
--spec
-     handle_account_close(bank_account_core:bank_account(),
-                          any()) -> bank_account_core:bank_account().
-
 handle_account_close(BankAccount, From) ->
     {ok, {NextState, Balance}} = close_account(BankAccount),
     From ! {ok, Balance},
     NextState.
-
--spec
-     bank_account_process(bank_account_core:bank_account()) -> ok.
 
 bank_account_process(BankAccount) ->
     receive
@@ -87,12 +108,10 @@ bank_account_process(BankAccount) ->
     end.
 
 % validation logic
+
 validate_amount(Amount) when Amount < 0 ->
     {error, invalid_amount};
 validate_amount(_Amount) -> ok.
-
--spec balance(pid()) -> number() |
-                        {error, bank_account_core:bank_account_error()}.
 
 balance(Pid) ->
     Pid ! {self(), {get_balance}},
@@ -100,9 +119,6 @@ balance(Pid) ->
         {ok, Balance} -> Balance;
         Error = {error, _} -> Error
     end.
-
--spec close(pid()) -> number() |
-                      {error, bank_account_core:bank_account_error()}.
 
 close(Pid) ->
     Pid ! {self(), {close}},
@@ -115,10 +131,6 @@ create() ->
     spawn(fun () -> bank_account_process(open_account())
           end).
 
--spec deposit(pid(), number()) -> number() |
-                                  {error,
-                                   bank_account_core:bank_account_error()}.
-
 deposit(Pid, Amount) ->
     case validate_amount(Amount) of
         ok ->
@@ -126,10 +138,6 @@ deposit(Pid, Amount) ->
             receive Msg -> Msg end;
         {error, invalid_amount} -> 0
     end.
-
--spec withdraw(pid(), number()) -> number() |
-                                   {error,
-                                    bank_account_core:bank_account_error()}.
 
 withdraw(Pid, Amount) ->
     case validate_amount(Amount) of
@@ -142,10 +150,6 @@ withdraw(Pid, Amount) ->
             end;
         {error, invalid_amount} -> 0
     end.
-
--spec charge(pid(), number()) -> number() |
-                                 {error,
-                                  bank_account_core:bank_account_error()}.
 
 charge(Pid, Amount) ->
     case validate_amount(Amount) of
