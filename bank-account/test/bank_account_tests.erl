@@ -43,6 +43,13 @@ withdraw_test() ->
     ?assert((Amount =:= 1)),
     ?assert((bank_account:balance(BankAccount) =:= 9)).
 
+withdraw_closed_account_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 10),
+    bank_account:close(BankAccount),
+    Result = bank_account:withdraw(BankAccount, 1),
+    ?assertEqual({error, account_closed}, Result).
+
 withdraw_fail_test() ->
     BankAccount = bank_account:create(),
     bank_account:deposit(BankAccount, 10),
@@ -74,6 +81,13 @@ charge_test() ->
     Amount = bank_account:charge(BankAccount, 2),
     ?assert((Amount =:= 2)),
     ?assert((bank_account:balance(BankAccount) =:= 8)).
+
+charge_closed_account_test() ->
+    BankAccount = bank_account:create(),
+    bank_account:deposit(BankAccount, 10),
+    bank_account:close(BankAccount),
+    Result = bank_account:charge(BankAccount, 1),
+    ?assertEqual({error, account_closed}, Result).
 
 charge_fail_test() ->
     BankAccount = bank_account:create(),
