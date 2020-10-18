@@ -7,114 +7,81 @@
          deposit/2,
          withdraw/2]).
 
--type bank_account_status() :: active | closed.
+-record(bank_account, {balance = 0 :: number()}).
 
--record(bank_account,
-        {balance = 0 :: number(),
-         status = active :: bank_account_status()}).
+% ---- bank account operations ----
 
-update_balance(Account = #bank_account{balance = B},
-               Amount) ->
-    Account#bank_account{balance = B + Amount}.
+update_balance(Account, Amount) ->
+    NewBalance = Account#bank_account.balance + Amount,
+    Account#bank_account{balance = NewBalance}.
 
-get_balance(#bank_account{status = closed}) ->
+deposit_amount(BankAccount, Amount) ->
+    {ok, update_balance(BankAccount, Amount), Amount}.
+
+withdraw_amount(Account, Amount) ->
+    Withdraw = min(Account#bank_account.balance, Amount),
+    {ok, update_balance(Account, -Withdraw), Withdraw}.
+
+charge_amount(Account, Amount)
+    when Amount > Account#bank_account.balance ->
+    {ok, Account, 0};
+charge_amount(Account, Amount) ->
+    {ok, update_balance(Account, -Amount), Amount}.
+
+get_balance(Account) ->
+    {ok, Account, Account#bank_account.balance}.
+
+open_account() -> #bank_account{}.
+
+% ---- process ----
+
+handle_message(Message, State) ->
+    case Message of
+        {deposit, Amount} -> deposit_amount(State, Amount);
+        {withdraw, Amount} -> withdraw_amount(State, Amount);
+        {charge, Amount} -> charge_amount(State, Amount);
+        balance -> get_balance(State)
+    end.
+
+bank_account_process(State) ->
+    receive
+        {From, close} ->
+            From ! State#bank_account.balance,
+            ok;
+        {From, Message} ->
+            {_, NextState, Result} = handle_message(Message, State),
+            From ! Result,
+            bank_account_process(NextState)
+    end.
+
+call_process(Pid, Message) ->
+    send_message(Pid, Message, is_process_alive(Pid)).
+
+send_message(_Pid, _Message, false) ->
     {error, account_closed};
-get_balance(BankAccount) ->
-    {ok, BankAccount#bank_account.balance}.
+send_message(Pid, Message, true) ->
+    Pid ! {self(), Message},
+    receive Msg -> Msg end.
 
-handle_deposit(Account = #bank_account{status = closed},
-               _, From) ->
-    From ! {error, account_closed},
-    Account;
-handle_deposit(Account, Amount, From) ->
-    UpdatedAccount = update_balance(Account, Amount),
-    From ! ok,
-    UpdatedAccount.
+start_bank_process() ->
+    bank_account_process(open_account()).
 
-handle_withdraw(Account = #bank_account{status =
-                                            closed},
-                _, From) ->
-    From ! {error, account_closed},
-    Account;
-handle_withdraw(Account = #bank_account{balance = B},
-                Amount, From) ->
-    Withdraw = min(B, Amount),
-    From ! {ok, Withdraw},
-    update_balance(Account, -Withdraw).
+% ---------- API ----------------
 
-handle_charge(Account = #bank_account{status = closed},
-              _, From) ->
-    From ! {error, account_closed},
-    Account;
-handle_charge(Account = #bank_account{balance = B},
-              Amount, From)
-    when Amount > B ->
-    From ! {ok, 0},
-    Account;
-handle_charge(BankAccount, Amount, From) ->
-    From ! {ok, Amount},
-    update_balance(BankAccount, -Amount).
+balance(Pid) -> call_process(Pid, balance).
 
-handle_account_close(BankAccount, From) ->
-    NextState = BankAccount#bank_account{status = closed},
-    From ! {ok, 0},
-    NextState.
+close(Pid) -> call_process(Pid, close).
 
-bank_account_process(BankAccount) ->
-    receive
-        {From, {deposit, Amount}} ->
-            NextState = handle_deposit(BankAccount, Amount, From),
-            bank_account_process(NextState);
-        {From, {withdraw, Amount}} ->
-            NextState = handle_withdraw(BankAccount, Amount, From),
-            bank_account_process(NextState);
-        {From, {charge, Amount}} ->
-            NextState = handle_charge(BankAccount, Amount, From),
-            bank_account_process(NextState);
-        {From, {close}} ->
-            NextState = handle_account_close(BankAccount, From),
-            bank_account_process(NextState);
-        {From, {get_balance}} ->
-            From ! get_balance(BankAccount),
-            bank_account_process(BankAccount);
-        terminate -> ok
-    end.
-
-balance(Pid) ->
-    Pid ! {self(), {get_balance}},
-    receive
-        {ok, Balance} -> Balance;
-        Error = {error, _} -> Error
-    end.
-
-close(Pid) ->
-    Pid ! {self(), {close}},
-    receive
-        {ok, Balance} -> Balance;
-        Error = {error, _} -> Error
-    end.
-
-create() ->
-    spawn(fun () -> bank_account_process(#bank_account{})
-          end).
+create() -> spawn(fun start_bank_process/0).
 
 deposit(_Pid, Amount) when Amount < 0 -> 0;
 deposit(Pid, Amount) ->
-    Pid ! {self(), {deposit, Amount}},
-    receive Msg -> Msg end.
+    call_process(Pid, {deposit, Amount}).
 
 withdraw(_Pid, Amount) when Amount < 0 -> 0;
 withdraw(Pid, Amount) ->
-    Pid ! {self(), {withdraw, Amount}},
-    receive
-        {ok, AmountWithdrawn} -> AmountWithdrawn;
-        Error = {error, _} -> Error
-    end.
+    call_process(Pid, {withdraw, Amount}).
 
 charge(_Pid, Amount) when Amount < 0 -> 0;
 charge(Pid, Amount) ->
-    Pid ! {self(), {charge, Amount}},
-    receive
-        {ok, AmountCharged} -> AmountCharged;
-        Error = {error, _} -> Error
-    end.
+    call_process(Pid, {charge, Amount}).
